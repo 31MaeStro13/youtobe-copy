@@ -4,10 +4,12 @@
 
 ---
 
-## 1. Быстрый старт (Запуск в 1 команду)
+## 1. Быстрый старт
 
 ```bash
-docker compose up --build -d
+git clone https://github.com/31MaeStro13/youtobe-copy.git
+cd youtobe-copy
+docker compose up -d
 ```
 
 После завершения сборки и запуска:
