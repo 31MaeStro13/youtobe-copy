@@ -125,19 +125,40 @@ async def seed():
             region_name="us-east-1",
         )
 
+        assets_dir = Path(__file__).parent / "assets"
+        demo_1 = assets_dir / "demo_video_1.mp4"
+        demo_2 = assets_dir / "demo_video_2.mp4"
+
         video_configs = [
-            {"title": "Welcome to YouTube Clone",    "color": "0x1a73e8", "duration": 8,  "channel": "admin"},
-            {"title": "My First Video Ever",         "color": "0xe53935", "duration": 10, "channel": "user"},
-            {"title": "Platform Demo Tour",          "color": "0x43a047", "duration": 6,  "channel": "admin"},
+            {
+                "title": "02. Анализ конкурентов и продуктовая стратегия",
+                "asset": str(demo_1) if demo_1.exists() else None,
+                "color": "0x1a73e8",
+                "duration": 90,
+                "channel": "admin",
+                "description": "Практический вебинар по анализу конкурентов, сегментации B2B/B2C и ценностному предложению.",
+            },
+            {
+                "title": "Вертушка 02.11.2026 — Защита проектов",
+                "asset": str(demo_2) if demo_2.exists() else None,
+                "color": "0xe53935",
+                "duration": 90,
+                "channel": "user",
+                "description": "Командная оценка и питчи стартапов в рамках интенсива.",
+            },
         ]
 
         with tempfile.TemporaryDirectory() as tmpdir:
             async with s3_session.client("s3", **s3_kwargs) as s3:
                 for idx, cfg in enumerate(video_configs):
-                    vid_path = os.path.join(tmpdir, f"video_{idx}.mp4")
                     thumb_path = os.path.join(tmpdir, f"thumb_{idx}.webp")
 
-                    _generate_test_video(vid_path, cfg["duration"], cfg["color"])
+                    if cfg.get("asset") and os.path.exists(cfg["asset"]):
+                        vid_path = cfg["asset"]
+                    else:
+                        vid_path = os.path.join(tmpdir, f"video_{idx}.mp4")
+                        _generate_test_video(vid_path, cfg["duration"], cfg["color"])
+
                     _generate_thumbnail(vid_path, thumb_path)
 
                     vid_key = f"videos/{uuid.uuid4().hex}_seed_{idx}.mp4"
@@ -157,7 +178,7 @@ async def seed():
                     video = Video(
                         channel_id=channels[cfg["channel"]].id,
                         title=cfg["title"],
-                        description=f"Seed video #{idx + 1} — demo content.",
+                        description=cfg.get("description", f"Seed video #{idx + 1} — demo content."),
                         video_s3_key=vid_key,
                         thumbnail_s3_key=thumb_key,
                         duration_seconds=cfg["duration"],
