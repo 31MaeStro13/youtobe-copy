@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>YouTube Clone</title>
+<link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar">
+  <a href="/" class="logo">▶ <span>Tube</span></a>
+  <div class="search-bar">
+    <input id="search-input" type="text" placeholder="Search videos..." onkeydown="if(event.key==='Enter')doSearch()">
+    <button onclick="doSearch()">🔍</button>
+  </div>
+  <div class="nav-actions" id="nav-actions"></div>
+</nav>
+
+<!-- Main Feed -->
+<div class="page">
+  <div class="container">
+    <div id="video-grid" class="video-grid">
+      <div class="spinner"></div>
+    </div>
+    <div id="load-more-wrap" style="text-align:center;margin-top:24px;display:none">
+      <button class="btn-action" onclick="loadMore()">Load more</button>
+    </div>
+  </div>
+</div>
+
+<script src="/js/api.js"></script>
+<script>
+let currentPage = 1;
+let loading = false;
+
+async function init() {
+  renderNavbar();
+  await loadVideos();
+}
+
+function renderNavbar() {
+  const el = document.getElementById('nav-actions');
+  if (API.isLoggedIn()) {
+    const u = API.getCurrentUser();
+    el.innerHTML = `
+      <a href="/upload.html" class="btn-nav btn-primary">+ Upload</a>
+      <a href="/channel.html" id="my-channel-link" class="btn-nav">📺 My Channel</a>
+      ${API.isModerator() ? '<a href="/moderation.html" class="btn-nav">🛡 Moderation</a>' : ''}
+      <div class="avatar-btn" title="${u.username}">${u.username[0].toUpperCase()}</div>
+      <button class="btn-nav" onclick="API.logout()">Logout</button>
+    `;
+    // Подставляем ID канала пользователя
+    API.request('GET', '/channels/my').then(channels => {
+      const link = document.getElementById('my-channel-link');
+      if (link && channels && channels.length > 0) {
+        link.href = `/channel.html?id=${channels[0].id}`;
+      }
+    });
+  } else {
+    el.innerHTML = `<a href="/auth.html" class="btn-nav btn-primary">Sign In</a>`;
+  }
+}
+
+async function loadVideos(page = 1, search = '') {
+  if (loading) return;
+  loading = true;
+  if (page === 1) document.getElementById('video-grid').innerHTML = '<div class="spinner"></div>';
+
+  try {
+    let url = `/videos/?page=${page}`;
+    if (search) url += `&search=${encodeURIComponent(search)}`;
+    const videos = await API.request('GET', url);
+    if (!videos) return;
+
+    const grid = document.getElementById('video-grid');
+    if (page === 1) grid.innerHTML = '';
+
+    if (videos.length === 0 && page === 1) {
+      grid.innerHTML = '<p style="color:var(--text2);text-align:center;grid-column:1/-1;padding:60px">No videos found</p>';
+      return;
+    }
+
+    videos.forEach(v => {
+      const card = document.createElement('div');
+      card.className = 'video-card';
+      card.onclick = () => location.href = `/watch.html?id=${v.id}`;
+      card.innerHTML = `
+        <div class="thumb">
+          ${v.thumbnail_url ? `<img src="${v.thumbnail_url}" alt="${escHtml(v.title)}" loading="lazy">` : '<div style="width:100%;height:100%;background:var(--bg3)"></div>'}
+          <span class="duration">${Utils.fmtDuration(v.duration_seconds)}</span>
+        </div>
+        <div class="info">
+          <div class="avatar" style="background:hsl(${hashStr(v.channel_title)*137%360},50%,40%);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:#fff">
+            ${v.channel_title[0].toUpperCase()}
+          </div>
+          <div class="meta">
+            <h3>${escHtml(v.title)}</h3>
+            <div class="sub">${escHtml(v.channel_title)}</div>
+            <div class="sub">${Utils.fmtViews(v.views_count)} views · ${Utils.fmtDate(v.created_at)}</div>
+          </div>
+        </div>
+      `;
+      grid.appendChild(card);
+    });
+
+    const loadMoreWrap = document.getElementById('load-more-wrap');
+    loadMoreWrap.style.display = videos.length === 20 ? 'block' : 'none';
+  } catch(e) {
+    Utils.showToast(e.message, 'error');
+  } finally {
+    loading = false;
+  }
+}
+
+async function loadMore() {
+  currentPage++;
+  await loadVideos(currentPage, document.getElementById('search-input').value);
+}
+
+function doSearch() {
+  const q = document.getElementById('search-input').value.trim();
+  if (q) location.href = `/search.html?q=${encodeURIComponent(q)}`;
+}
+
+function hashStr(s) {
+  let h = 0;
+  for (const c of s) h = (h << 5) - h + c.charCodeAt(0);
+  return Math.abs(h);
+}
+
+init();
+</script>
+</body>
+</html>

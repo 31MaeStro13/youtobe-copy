@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Channel - YouTube Clone</title>
+<link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <a href="/" class="logo">▶ <span>Tube</span></a>
+  <div class="search-bar">
+    <input id="q" type="text" placeholder="Search..." onkeydown="if(event.key==='Enter')location.href='/search.html?q='+encodeURIComponent(this.value)">
+    <button onclick="location.href='/search.html?q='+encodeURIComponent(document.getElementById('q').value)">🔍</button>
+  </div>
+  <div class="nav-actions" id="nav-actions"></div>
+</nav>
+
+<div class="page">
+  <div class="container">
+    <div class="channel-banner"></div>
+    <div id="channel-header" class="channel-header">
+      <div class="spinner"></div>
+    </div>
+    <h3 style="margin-bottom: 20px;">Uploads</h3>
+    <div id="channel-videos" class="video-grid">
+      <div class="spinner"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/js/api.js"></script>
+<script>
+const params = new URLSearchParams(location.search);
+const channelId = parseInt(params.get('id'));
+
+async function init() {
+  renderNavbar();
+  let cid = channelId;
+  if (!cid) {
+    const myCh = await API.request('GET', '/channels/my');
+    if (myCh && myCh.length > 0) {
+      cid = myCh[0].id;
+    } else {
+      location.href = '/';
+      return;
+    }
+  }
+  await Promise.all([loadChannel(cid), loadVideos(cid)]);
+}
+
+function renderNavbar() {
+  const el = document.getElementById('nav-actions');
+  if (API.isLoggedIn()) {
+    const u = API.getCurrentUser();
+    el.innerHTML = `
+      <a href="/upload.html" class="btn-nav btn-primary">+ Upload</a>
+      <a href="/channel.html" id="my-channel-link" class="btn-nav">📺 My Channel</a>
+      ${API.isModerator() ? '<a href="/moderation.html" class="btn-nav">🛡 Mod</a>' : ''}
+      <div class="avatar-btn" title="${u.username}">${u.username[0].toUpperCase()}</div>
+      <button class="btn-nav" onclick="API.logout()">Logout</button>
+    `;
+    API.request('GET', '/channels/my').then(channels => {
+      const link = document.getElementById('my-channel-link');
+      if (link && channels && channels.length > 0) {
+        link.href = `/channel.html?id=${channels[0].id}`;
+      }
+    });
+  } else {
+    el.innerHTML = `<a href="/auth.html" class="btn-nav btn-primary">Sign In</a>`;
+  }
+}
+
+let activeChannelId = null;
+
+async function loadChannel(cid) {
+  activeChannelId = cid;
+  const header = document.getElementById('channel-header');
+  try {
+    const ch = await API.request('GET', `/channels/${cid}`);
+    if (!ch) return;
+    document.title = `${ch.title} - Tube`;
+    
+    const me = API.getCurrentUser();
+    const isOwner = me && me.id === ch.owner_id;
+
+    header.innerHTML = `
+      <div class="ch-big-avatar" style="background:hsl(${hashStr(ch.title)*137%360},50%,40%)">
+        ${ch.title[0].toUpperCase()}
+      </div>
+      <div style="flex:1">
+        <h1 class="ch-name">${escHtml(ch.title)}</h1>
+        <div class="ch-subs"><span id="subs-count">${Utils.fmtViews(ch.subscribers_count)}</span> subscribers</div>
+        ${ch.description ? `<p style="margin-top:6px;font-size:14px;color:var(--text2)">${escHtml(ch.description)}</p>` : ''}
+      </div>
+      ${API.isLoggedIn() && !isOwner ? `
+        <button class="btn-subscribe ${ch.is_subscribed ? 'subscribed' : ''}" id="btn-sub" onclick="toggleSubscribe(${cid})">
+          ${ch.is_subscribed ? 'Subscribed' : 'Subscribe'}
+        </button>
+      ` : ''}
+    `;
+  } catch(e) {
+    header.innerHTML = `<p style="color:var(--text2)">${e.message}</p>`;
+  }
+}
+
+async function toggleSubscribe(cid) {
+  const targetId = cid || activeChannelId;
+  const btn = document.getElementById('btn-sub');
+  const isSub = btn.classList.contains('subscribed');
+  const subsEl = document.getElementById('subs-count');
+  try {
+    if (isSub) {
+      await API.request('DELETE', `/channels/${targetId}/subscribe`);
+      btn.textContent = 'Subscribe';
+      btn.classList.remove('subscribed');
+    } else {
+      await API.request('POST', `/channels/${targetId}/subscribe`);
+      btn.textContent = 'Subscribed';
+      btn.classList.add('subscribed');
+    }
+    const updatedCh = await API.request('GET', `/channels/${targetId}`);
+    subsEl.textContent = Utils.fmtViews(updatedCh.subscribers_count);
+  } catch(e) {
+    Utils.showToast(e.message, 'error');
+  }
+}
+
+async function loadVideos(cid) {
+  const grid = document.getElementById('channel-videos');
+  try {
+    const videos = await API.request('GET', `/channels/${cid}/videos`);
+    if (!videos || videos.length === 0) {
+      grid.innerHTML = '<p style="color:var(--text2);grid-column:1/-1;text-align:center;padding:40px">This channel has no videos yet.</p>';
+      return;
+    }
+    grid.innerHTML = videos.map(v => `
+      <div class="video-card" onclick="location.href='/watch.html?id=${v.id}'">
+        <div class="thumb">
+          ${v.thumbnail_url ? `<img src="${v.thumbnail_url}" alt="${escHtml(v.title)}" loading="lazy">` : '<div style="width:100%;height:100%;background:var(--bg3)"></div>'}
+          <span class="duration">${Utils.fmtDuration(v.duration_seconds)}</span>
+        </div>
+        <div class="info">
+          <div class="meta">
+            <h3>${escHtml(v.title)}</h3>
+            <div class="sub">${Utils.fmtViews(v.views_count)} views · ${Utils.fmtDate(v.created_at)}</div>
+          </div>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {
+    grid.innerHTML = `<p style="color:var(--text2);grid-column:1/-1">${e.message}</p>`;
+  }
+}
+
+function hashStr(s) {
+  let h = 0;
+  for (const c of s) h = (h << 5) - h + c.charCodeAt(0);
+  return Math.abs(h);
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Upload - YouTube Clone</title>
+<link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+<nav class="navbar">
+  <a href="/" class="logo">▶ <span>Tube</span></a>
+  <div class="nav-actions">
+    <button class="btn-nav" onclick="API.logout()">Logout</button>
+  </div>
+</nav>
+<div class="page">
+  <div class="container">
+    <div class="upload-wrap">
+      <h1>Upload Video</h1>
+
+      <!-- Drop Zone -->
+      <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+        <div class="icon">📹</div>
+        <p>Drag & drop your video or click to browse</p>
+        <p class="hint">MP4, WebM, AVI — up to 2 GB</p>
+        <input type="file" id="file-input" accept="video/*" style="display:none" onchange="onFileSelect(this.files[0])">
+      </div>
+
+      <div id="selected-file" style="display:none;padding:12px;background:var(--bg2);border-radius:8px;margin-top:12px;font-size:14px"></div>
+
+      <!-- Progress -->
+      <div class="progress-bar" id="progress-wrap" style="display:none">
+        <div class="fill" id="progress-fill"></div>
+      </div>
+      <div id="progress-status" style="color:var(--text2);font-size:13px;margin-top:4px"></div>
+
+      <!-- Metadata Form -->
+      <div id="meta-form" style="display:none;margin-top:24px">
+        <div class="form-group">
+          <label>Title <span style="color:var(--accent)">*</span></label>
+          <input type="text" id="title" placeholder="Video title" style="width:100%;height:44px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:0 14px;font-size:15px">
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <textarea id="description" placeholder="Video description..." rows="4"
+            style="width:100%;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:12px 14px;font-size:14px;resize:vertical;font-family:inherit"></textarea>
+        </div>
+        <div class="form-group">
+          <label>Privacy</label>
+          <select id="privacy" style="width:100%;height:44px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:0 12px;font-size:15px">
+            <option value="public">Public</option>
+            <option value="unlisted">Unlisted</option>
+            <option value="private">Private</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Channel</label>
+          <select id="channel-select" style="width:100%;height:44px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:0 12px;font-size:15px">
+            <option value="">Loading channels...</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:12px;margin-top:16px;align-items:center">
+          <button class="btn-action btn-primary" id="upload-btn" onclick="uploadVideo()"
+            style="padding:12px 32px;font-size:16px;border-radius:8px">
+            Upload Video
+          </button>
+          <span id="upload-status" style="color:var(--text2);font-size:13px"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/js/api.js"></script>
+<script>
+// Guard
+if (!API.isLoggedIn()) location.href = '/auth.html?next=/upload.html';
+
+let selectedFile = null;
+
+// Drag and drop
+const dz = document.getElementById('drop-zone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+dz.addEventListener('drop', e => {
+  e.preventDefault();
+  dz.classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (f) onFileSelect(f);
+});
+
+function onFileSelect(file) {
+  selectedFile = file;
+  document.getElementById('selected-file').style.display = 'block';
+  document.getElementById('selected-file').innerHTML =
+    `📄 <strong>${escHtml(file.name)}</strong> — ${(file.size / 1024 / 1024).toFixed(1)} MB`;
+  document.getElementById('meta-form').style.display = 'block';
+  if (!document.getElementById('title').value) {
+    document.getElementById('title').value = file.name.replace(/\.[^.]+$/, '');
+  }
+}
+
+async function loadChannels() {
+  const sel = document.getElementById('channel-select');
+  try {
+    const channels = await API.request('GET', '/channels/my');
+    if (channels && channels.length > 0) {
+      sel.innerHTML = channels.map(c => `<option value="${c.id}">${escHtml(c.title)}</option>`).join('');
+      sel.innerHTML += '<option value="__new__">+ Create new channel</option>';
+    } else {
+      sel.innerHTML = '<option value="__new__">+ Create new channel</option>';
+    }
+  } catch(e) {
+    sel.innerHTML = '<option value="__new__">+ Create new channel</option>';
+  }
+}
+
+async function uploadVideo() {
+  const title = document.getElementById('title').value.trim();
+  const channelSel = document.getElementById('channel-select').value;
+
+  if (!selectedFile) { Utils.showToast('Select a file first', 'error'); return; }
+  if (!title) { Utils.showToast('Title is required', 'error'); return; }
+
+  const btn = document.getElementById('upload-btn');
+  btn.disabled = true;
+  btn.textContent = 'Uploading...';
+
+  try {
+    let channelId;
+
+    if (channelSel === '__new__' || !channelSel) {
+      // Create channel with username as title
+      const me = await API.request('GET', '/auth/me');
+      const ch = await API.request('POST', '/channels/', {
+        title: `${me.username}'s Channel`,
+        description: 'My channel',
+      });
+      channelId = ch.id;
+    } else {
+      channelId = parseInt(channelSel);
+    }
+
+    const form = new FormData();
+    form.append('file', selectedFile);
+    form.append('title', title);
+    form.append('description', document.getElementById('description').value);
+    form.append('privacy', document.getElementById('privacy').value);
+    form.append('channel_id', channelId);
+
+    // XHR for progress bar
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const token = localStorage.getItem('access_token');
+
+      xhr.upload.addEventListener('progress', e => {
+        if (e.lengthComputable) {
+          const pct = Math.round(e.loaded / e.total * 100);
+          document.getElementById('progress-wrap').style.display = 'block';
+          document.getElementById('progress-fill').style.width = pct + '%';
+          document.getElementById('progress-status').textContent = `Uploading: ${pct}%`;
+        }
+      });
+
+      xhr.addEventListener('load', () => {
+        if (xhr.status === 201) {
+          const data = JSON.parse(xhr.responseText);
+          document.getElementById('progress-status').textContent = '✅ Upload complete! Processing video...';
+          setTimeout(() => location.href = `/watch.html?id=${data.id}`, 1500);
+          resolve(data);
+        } else {
+          const err = JSON.parse(xhr.responseText);
+          reject(new Error(err.detail || 'Upload failed'));
+        }
+      });
+
+      xhr.addEventListener('error', () => reject(new Error('Network error')));
+
+      xhr.open('POST', '/api/v1/videos/upload');
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.send(form);
+    });
+
+  } catch(e) {
+    Utils.showToast(e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = 'Upload Video';
+  }
+}
+
+loadChannels();
+</script>
+</body>
+</html>

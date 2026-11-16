@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Watch - YouTube Clone</title>
+<link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <a href="/" class="logo">▶ <span>Tube</span></a>
+  <div class="search-bar">
+    <input id="q" type="text" placeholder="Search..." onkeydown="if(event.key==='Enter')location.href='/search.html?q='+encodeURIComponent(this.value)">
+    <button onclick="location.href='/search.html?q='+encodeURIComponent(document.getElementById('q').value)">🔍</button>
+  </div>
+  <div class="nav-actions" id="nav-actions"></div>
+</nav>
+
+<div class="page">
+  <div class="container">
+    <div id="content"><div class="spinner"></div></div>
+  </div>
+</div>
+
+<!-- Report Modal -->
+<div class="modal-overlay" id="report-modal">
+  <div class="modal">
+    <h2>Report Video</h2>
+    <div class="form-group">
+      <label>Reason</label>
+      <select id="report-reason" style="width:100%;height:44px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:0 12px;font-size:15px">
+        <option value="spam">Spam</option>
+        <option value="inappropriate">Inappropriate content</option>
+        <option value="copyright">Copyright violation</option>
+        <option value="violence">Violence</option>
+        <option value="other">Other</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Description (optional)</label>
+      <input type="text" id="report-desc" style="width:100%;height:44px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:0 12px;font-size:15px">
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeReportModal()">Cancel</button>
+      <button class="btn-action btn-primary" onclick="submitReport()">Submit Report</button>
+    </div>
+  </div>
+</div>
+
+<script src="/js/api.js"></script>
+<script>
+const params = new URLSearchParams(location.search);
+const videoId = parseInt(params.get('id'));
+let videoData = null;
+
+async function init() {
+  renderNav();
+  if (!videoId) { location.href = '/'; return; }
+  try {
+    videoData = await API.request('GET', `/videos/${videoId}`);
+    if (!videoData) { location.href = '/'; return; }
+    render(videoData);
+    loadComments();
+    loadSidebar();
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<p style="color:var(--text2);padding:40px;text-align:center">${e.message}</p>`;
+  }
+}
+
+function renderNav() {
+  const el = document.getElementById('nav-actions');
+  if (API.isLoggedIn()) {
+    const u = API.getCurrentUser();
+    el.innerHTML = `
+      <a href="/upload.html" class="btn-nav btn-primary">+ Upload</a>
+      <a href="/channel.html" id="my-channel-link" class="btn-nav">📺 My Channel</a>
+      ${API.isModerator() ? '<a href="/moderation.html" class="btn-nav">🛡 Mod</a>' : ''}
+      <div class="avatar-btn">${u.username[0].toUpperCase()}</div>
+      <button class="btn-nav" onclick="API.logout()">Logout</button>
+    `;
+    API.request('GET', '/channels/my').then(channels => {
+      const link = document.getElementById('my-channel-link');
+      if (link && channels && channels.length > 0) {
+        link.href = `/channel.html?id=${channels[0].id}`;
+      }
+    });
+  } else {
+    el.innerHTML = `<a href="/auth.html" class="btn-nav btn-primary">Sign In</a>`;
+  }
+}
+
+function render(v) {
+  const isOwner = v.is_owner;
+  const liked = v.user_reaction === true;
+  const disliked = v.user_reaction === false;
+
+  document.title = `${v.title} - Tube`;
+  document.getElementById('content').innerHTML = `
+    <div class="watch-layout">
+      <div class="watch-main">
+        <div class="player-wrap" style="position:relative;background:#000;display:flex;align-items:center;justify-content:center;aspect-ratio:16/9">
+          ${v.status === 'ready' ? `
+            <video id="player" controls preload="metadata" src="${v.stream_url || ''}" style="width:100%;height:100%">
+              Your browser does not support HTML5 video.
+            </video>
+          ` : `
+            <div style="text-align:center;padding:40px;color:var(--text)">
+              <div style="font-size:36px;margin-bottom:12px">${v.status === 'processing' ? '⏳' : '⚠️'}</div>
+              <div style="font-size:18px;font-weight:600">Video is ${v.status}</div>
+              <div style="color:var(--text2);font-size:13px;margin-top:6px">${v.status === 'processing' ? 'Processing video and generating preview... Auto-refreshing in 5s.' : 'Failed to process video.'}</div>
+            </div>
+          `}
+        </div>
+        <h1 class="watch-title">${escHtml(v.title)}</h1>
+        <div class="watch-meta">
+          <span class="views">${Utils.fmtViews(v.views_count)} views · ${Utils.fmtDate(v.created_at)}</span>
+          <div class="watch-actions">
+            <button class="btn-action ${liked ? 'active' : ''}" id="btn-like" onclick="reactVideo(true)">
+              👍 <span id="like-count">${v.likes_count}</span>
+            </button>
+            <button class="btn-action ${disliked ? 'active' : ''}" id="btn-dislike" onclick="reactVideo(false)">
+              👎 <span id="dis-count">${v.dislikes_count}</span>
+            </button>
+            ${API.isLoggedIn() ? `<button class="btn-action" onclick="openReportModal()">🚩 Report</button>` : ''}
+            ${isOwner ? `<a href="/upload.html?edit=${v.id}" class="btn-action">✏ Edit</a>` : ''}
+            ${isOwner || API.isAdmin() ? `<button class="btn-action" onclick="deleteVideo()">🗑 Delete</button>` : ''}
+          </div>
+        </div>
+
+        <div class="channel-row">
+          <div class="ch-avatar" style="background:hsl(${hashStr(v.channel_title)*137%360},50%,40%)">
+            ${v.channel_title[0].toUpperCase()}
+          </div>
+          <div class="ch-info" style="flex:1">
+            <a href="/channel.html?id=${v.channel_id}" class="name">${escHtml(v.channel_title)}</a>
+            <div class="subs">${Utils.fmtViews(v.channel_subscribers_count)} subscribers</div>
+          </div>
+          ${API.isLoggedIn() && !isOwner ? `
+            <button class="btn-subscribe ${v.is_subscribed ? 'subscribed' : ''}" id="btn-sub"
+              onclick="toggleSubscribe(${v.channel_id})">
+              ${v.is_subscribed ? 'Subscribed' : 'Subscribe'}
+            </button>
+          ` : ''}
+        </div>
+
+        ${v.description ? `<p style="margin-top:16px;color:var(--text2);font-size:14px;line-height:1.6;white-space:pre-wrap">${escHtml(v.description)}</p>` : ''}
+
+        <!-- Status badge for processing/failed -->
+        ${v.status !== 'ready' ? `<div style="margin-top:12px;padding:10px;background:var(--bg2);border-radius:8px;color:var(--text2)">
+          Video is ${v.status}...${v.status === 'processing' ? ' <span id="proc-dot">⏳</span>' : ''}
+        </div>` : ''}
+
+        <!-- Comments -->
+        <div class="comments-section">
+          <h3 style="margin-bottom:16px">Comments</h3>
+          ${API.isLoggedIn() ? `
+            <div class="comment-input-row">
+              <div class="c-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;flex-shrink:0">
+                ${API.getCurrentUser().username[0].toUpperCase()}
+              </div>
+              <textarea id="comment-text" placeholder="Add a comment..." rows="1" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px'"></textarea>
+              <button class="btn-action" onclick="postComment()">Post</button>
+            </div>
+          ` : ''}
+          <div id="comments-list"></div>
+        </div>
+      </div>
+
+      <div class="watch-sidebar">
+        <div class="sidebar-title">Related Videos</div>
+        <div id="sidebar-videos"><div class="spinner"></div></div>
+      </div>
+    </div>
+  `;
+
+  // Poll status if processing
+  if (v.status === 'processing') {
+    setTimeout(() => location.reload(), 5000);
+  }
+}
+
+async function reactVideo(isLike) {
+  if (!API.isLoggedIn()) { location.href = '/auth.html'; return; }
+  try {
+    await API.request('POST', `/videos/${videoId}/like`, { is_like: isLike });
+    // Reload to get updated counts
+    videoData = await API.request('GET', `/videos/${videoId}`);
+    document.getElementById('like-count').textContent = videoData.likes_count;
+    document.getElementById('dis-count').textContent = videoData.dislikes_count;
+    document.getElementById('btn-like').className = `btn-action ${videoData.user_reaction === true ? 'active' : ''}`;
+    document.getElementById('btn-dislike').className = `btn-action ${videoData.user_reaction === false ? 'active' : ''}`;
+  } catch(e) { Utils.showToast(e.message, 'error'); }
+}
+
+async function toggleSubscribe(channelId) {
+  if (!API.isLoggedIn()) { location.href = '/auth.html'; return; }
+  const btn = document.getElementById('btn-sub');
+  const isSub = btn.classList.contains('subscribed');
+  try {
+    if (isSub) {
+      await API.request('DELETE', `/channels/${channelId}/subscribe`);
+      btn.textContent = 'Subscribe'; btn.classList.remove('subscribed');
+    } else {
+      await API.request('POST', `/channels/${channelId}/subscribe`);
+      btn.textContent = 'Subscribed'; btn.classList.add('subscribed');
+    }
+  } catch(e) { Utils.showToast(e.message, 'error'); }
+}
+
+async function loadComments() {
+  const list = document.getElementById('comments-list');
+  try {
+    const comments = await API.request('GET', `/videos/${videoId}/comments/`);
+    if (!comments || comments.length === 0) {
+      list.innerHTML = '<p style="color:var(--text2);font-size:14px">No comments yet.</p>';
+      return;
+    }
+    list.innerHTML = comments.map(c => `
+      <div class="comment-item">
+        <div class="c-avatar" style="background:hsl(${hashStr(c.author_username)*137%360},50%,40%)">
+          ${c.author_username[0].toUpperCase()}
+        </div>
+        <div class="c-body">
+          <span class="author">${escHtml(c.author_username)}</span>
+          <span style="color:var(--text2);font-size:12px;margin-left:8px">${Utils.fmtDate(c.created_at)}</span>
+          <p class="text">${escHtml(c.text)}</p>
+          <div class="c-actions">
+            <button onclick="likeComment(${c.id})">👍 ${c.likes_count}</button>
+            ${c.replies_count ? `<button onclick="loadReplies(${c.id})">↩ ${c.replies_count} replies</button>` : ''}
+            ${API.isLoggedIn() ? `<button data-cid="${c.id}" data-author="${escHtml(c.author_username)}" onclick="replyToBtn(this)">Reply</button>` : ''}
+          </div>
+          <div id="replies-${c.id}"></div>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {}
+}
+
+async function postComment(parentId = null) {
+  const ta = document.getElementById('comment-text');
+  const text = ta.value.trim();
+  if (!text) return;
+  try {
+    await API.request('POST', `/videos/${videoId}/comments/`, { text, parent_id: parentId });
+    ta.value = '';
+    loadComments();
+  } catch(e) { Utils.showToast(e.message, 'error'); }
+}
+
+async function likeComment(id) {
+  if (!API.isLoggedIn()) { location.href = '/auth.html'; return; }
+  try {
+    await API.request('POST', `/videos/${videoId}/comments/${id}/like`);
+    loadComments();
+  } catch(e) {}
+}
+
+async function loadReplies(parentId) {
+  const el = document.getElementById(`replies-${parentId}`);
+  if (el.dataset.loaded) { el.innerHTML = ''; delete el.dataset.loaded; return; }
+  const replies = await API.request('GET', `/videos/${videoId}/comments/${parentId}/replies`);
+  el.dataset.loaded = '1';
+  el.innerHTML = (replies || []).map(r => `
+    <div class="comment-item" style="margin-top:8px">
+      <div class="c-avatar" style="width:24px;height:24px;font-size:10px;background:hsl(${hashStr(r.author_username)*137%360},50%,40%)">
+        ${r.author_username[0].toUpperCase()}
+      </div>
+      <div class="c-body">
+        <span class="author" style="font-size:12px">${escHtml(r.author_username)}</span>
+        <p class="text">${escHtml(r.text)}</p>
+      </div>
+    </div>
+  `).join('');
+}
+
+function replyToBtn(btn) {
+  const parentId = btn.dataset.cid;
+  const username = btn.dataset.author;
+  replyTo(parentId, username);
+}
+
+function replyTo(parentId, username) {
+  const ta = document.getElementById('comment-text');
+  ta.value = `@${username} `;
+  ta.focus();
+  ta.dataset.replyTo = parentId;
+}
+
+async function loadSidebar() {
+  const el = document.getElementById('sidebar-videos');
+  const videos = await API.request('GET', '/videos/');
+  el.innerHTML = (videos || []).filter(v => v.id !== videoId).slice(0, 10).map(v => `
+    <div onclick="location.href='/watch.html?id=${v.id}'" style="display:flex;gap:8px;margin-bottom:12px;cursor:pointer">
+      <div style="width:120px;border-radius:6px;overflow:hidden;aspect-ratio:16/9;background:var(--bg3);flex-shrink:0;position:relative">
+        ${v.thumbnail_url ? `<img src="${v.thumbnail_url}" style="width:100%;height:100%;object-fit:cover" loading="lazy">` : ''}
+        <span style="position:absolute;bottom:3px;right:4px;background:rgba(0,0,0,.85);color:#fff;font-size:10px;padding:1px 4px;border-radius:3px">${Utils.fmtDuration(v.duration_seconds)}</span>
+      </div>
+      <div>
+        <div style="font-size:13px;font-weight:500;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${escHtml(v.title)}</div>
+        <div style="font-size:11px;color:var(--text2);margin-top:3px">${escHtml(v.channel_title)}</div>
+        <div style="font-size:11px;color:var(--text2)">${Utils.fmtViews(v.views_count)} views</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function openReportModal() {
+  document.getElementById('report-modal').classList.add('open');
+}
+function closeReportModal() {
+  document.getElementById('report-modal').classList.remove('open');
+}
+
+async function submitReport() {
+  const reason = document.getElementById('report-reason').value;
+  const description = document.getElementById('report-desc').value;
+  try {
+    await API.request('POST', '/moderation/reports', { video_id: videoId, reason, description });
+    closeReportModal();
+    Utils.showToast('Report submitted', 'success');
+  } catch(e) { Utils.showToast(e.message, 'error'); }
+}
+
+async function deleteVideo() {
+  if (!confirm('Delete this video permanently?')) return;
+  try {
+    await API.request('DELETE', `/videos/${videoId}`);
+    location.href = '/';
+  } catch(e) { Utils.showToast(e.message, 'error'); }
+}
+
+function hashStr(s) {
+  let h = 0;
+  for (const c of s) h = (h << 5) - h + c.charCodeAt(0);
+  return Math.abs(h);
+}
+
+init();
+</script>
+</body>
+</html>
